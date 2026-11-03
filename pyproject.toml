@@ -1,0 +1,53 @@
+[tool.black]
+line-length = 120
+
+[tool.ruff]
+target-version = "py311"
+line-length = 120
+
+[tool.ruff.lint]
+extend-select = ["I"]
+
+[tool.ruff.lint.flake8-bugbear]
+extend-immutable-calls = ["renderer_client.RenderOptions"]
+
+[tool.mypy]
+python_version = "3.11"
+strict = true
+files = ["main.py", "src"]
+
+[tool.poetry]
+name = "3d-phase2-api-duongnd"
+version = "0.1.0"
+description = "Plan · three chains · pick · reviewed, gated rewrites: images to Three.js with OpenAI models"
+authors = ["WIGIN AI <contact@wigin.ai>"]
+readme = "README.md"
+packages = [{ include = "src" }]
+
+[tool.poetry.dependencies]
+python = ">=3.13,<3.14"
+openai = "==3.29.0"
+pydantic = "==2.14.1"
+numpy = "==2.5.4"
+pillow = "==13.0.0"
+
+[tool.poetry.group.dev.dependencies]
+poethepoet = "0.38.0"
+bandit = "1.9.2"
+black = "26.10.1"
+mypy = "2.4.0"
+ruff = "0.17.3"
+
+[tool.poe.tasks.lint]
+help = "Run all linters and formatters"
+ignore_fail = "return_non_zero"
+sequence = [
+    { cmd = "ruff check --fix main.py src" },
+    { cmd = "black main.py src" },
+    { cmd = "bandit -rq -c pyproject.toml main.py src" },
+    { cmd = "mypy" },
+]
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
