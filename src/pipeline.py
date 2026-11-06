@@ -1,11 +1,14 @@
 """Image → Three.js module.
 
   1 plan: notes on the photo (object, visible side, proportions, parts, text) and a short checklist
-  2 three chains, concurrently, from different starting points: a draft, then full rewrites that see the photo and
-    the module rendered from the judge's 4 views; a module the renderer rejects gets a repair call
-  3 pick one of the chain finals with per-view questions, both seat orders
-  4 more full rewrites of the picked module
-  5 output (a measured fallback if nothing ever rendered)
+  2 three chains, concurrently, from different starting points: a draft (high effort), then full rewrites that see the
+    photo, a close-up crop of the object and the module rendered from the judge's 4 views; a module the renderer
+    rejects gets a repair call
+  3 pick one of the chain finals: one call scores them all, both candidate orders
+  4 more full rewrites of the picked module, then one check: the picked module against the last rewrite in GLM's
+    Stage 1; the picked one comes back only when it wins
+  5 pose: extra tilts towards the camera, screened by colour layout (no model call), checked in Stage 1
+  6 output (a measured fallback if nothing ever rendered)
 
 Every decision depends only on model replies, renders and recorded usage (no clocks, no completion order): each
 chain draws request ids from its own block, the later stages run one call batch at a time, renders run one at a
@@ -106,6 +109,7 @@ class Version:
     cap: bool = False  # rendered with the vertex cap (still over the limit after its repair)
     yaw: int = 0  # orientation the module is rendered and submitted in (degrees, Pose)
     pitch: int = 0
+    tilt: int = 0  # extra tilt towards the camera from the pose step (degrees, Pose)
 
     def sheet(self, px: int) -> Image.Image:
         return sheet_of(self.front, px)
@@ -123,6 +127,9 @@ class Run:
         self.calls = Calls(self.witness, self.ledger)
         self.photo = Image.open(io.BytesIO(self.image)).convert("RGB")
         self.photo_png = png_bytes(self.photo, 1024)
+        closeup = V.object_closeup(self.photo)
+        self.closeup_png = png_bytes(closeup) if closeup is not None else None
+        self.colours: V.ColourLayout | None = None
         self.events: list[dict[str, Any]] = []
         self.versions: list[Version] = []
         self.chain_final: dict[int, Version] = {}  # the last module that rendered, per chain
@@ -140,7 +147,7 @@ class Run:
 
     # ---- 1. plan ----------------------------------------------------------------------------------------------------
     async def make_plan(self) -> None:
-        r = await self.calls.ask("plan", self.S.plan, P.PLAN_SYSTEM, [self.photo_png, P.PLAN], P.PLAN_SCHEMA)
+        r = await self.calls.ask("plan", self.S.plan, P.PLAN_SYSTEM, [*self.photo_parts(), P.PLAN], P.PLAN_SCHEMA)
         self.plan = r.data if isinstance(r.data, dict) else {}
         self.checklist = P.checklist_of(self.plan)
         self.note(
@@ -190,9 +197,15 @@ class Run:
             return None
         return res
 
+    def photo_parts(self) -> list[Part]:
+        """The photo, then (when the object does not already fill it) a close-up crop of the object at 1024 px."""
+        if self.closeup_png is None:
+            return [self.photo_png]
+        return [self.photo_png, "Close-up of the object (a crop of the same photo):", self.closeup_png]
+
     def refine_parts(self, v: Version, notes: str) -> list[Part]:
         return [
-            self.photo_png,
+            *self.photo_parts(),
             png_bytes(v.sheet(self.S.sheet_px)),
             *([OVER_LIMIT_NOTE] if v.cap else []),
             P.REFINE.format(notes=notes, code=v.build),
@@ -258,7 +271,7 @@ class Run:
     async def chain(self, k: int) -> None:
         S = self.S
         calls = self.calls.fork((k + 1) * S.chain_ids)
-        r = await calls.ask("draft", S.draft, P.CODER_SYSTEM, [self.photo_png, self.draft_prompt(k)])
+        r = await calls.ask("draft", S.draft, P.CODER_SYSTEM, [*self.photo_parts(), self.draft_prompt(k)])
         current = await self.settle(calls, f"c{k}d", extract_build(r.text) if r.ok else None, k, 0)
         if current is not None:
             current = await self.turn(calls, current, k)
@@ -276,7 +289,7 @@ class Run:
         if current is not None:
             self.chain_final[k] = current
 
-    # ---- 3. Astra scores the chains' modules on the judge's views, both candidate orders --------------------------
+    # ---- 3. one call scores the chains' modules on the judge's views, both candidate orders -----------------------
     async def pick(self, cands: list[Version]) -> Version:
         S, n = self.S, len(cands)
         default = cands[0]  # the lowest chain: the plan's notes
@@ -426,6 +439,76 @@ class Run:
             if kept:
                 self.best = new
 
+    def check_fits(self, v: Version) -> bool:
+        n = 2 * len(JUDGE)
+        return self.ledger.can(n, n * self.worst_case(self.S.duel, P.JUDGE_SYSTEM, self.gate_parts(v, v, JUDGE[0][0])))
+
+    async def final_check(self, picked: Version) -> None:
+        """The picked module against the last rewrite (GLM's Stage 1, both seat orders); the rewrites are dropped only
+        when the picked module wins."""
+        best = self.best
+        if not self.S.final_check or best is None or best is picked:
+            return
+        if not self.check_fits(best):
+            self.note("final_check", skipped="budget")
+            return
+        angles = await self.compare(picked, best)
+        verdict = s1_result(angles, self.S)
+        self.note(
+            "final_check",
+            picked=picked.id,
+            last=best.id,
+            views=[(round(a, 1), round(b, 1)) for a, b in angles],
+            s1=verdict,
+            kept=picked.id if verdict == "A" else best.id,
+        )
+        if verdict == "A":
+            self.best = picked
+
+    # ---- 5. pose: extra tilts towards the camera, screened by colour layout, checked in Stage 1 --------------------
+    async def pose(self) -> None:
+        S, best = self.S, self.best
+        if best is None or not S.pose_tilts:
+            return
+        if self.colours is None:
+            self.colours = V.ColourLayout(self.photo)
+        if not self.colours.ok:
+            return
+        base = self.colours.score(best.front)
+        cands: list[tuple[float, int, dict[str, Image.Image]]] = []
+        for t in S.pose_tilts:
+            async with self.render_lock:
+                try:
+                    pose = Pose(yaw=best.yaw, pitch=best.pitch, cap=best.cap, tilt=best.tilt + t)
+                    front = await render(self.witness, assemble(best.build, pose), JUDGE, S.sheet_px)
+                except Rejected:
+                    continue
+            if not (V.checks(front, None) or [""])[0].startswith("EMPTY"):
+                cands.append((self.colours.score(front) - base, t, front))
+        passed = [c for c in cands if c[0] > S.pose_colour_gain]
+        self.note("pose_colour", base=round(base, 3), gains={t: round(g, 3) for g, t, _ in cands})
+        if not passed:
+            return
+        gain, t, front = max(passed, key=lambda c: (c[0], -c[1]))
+        cand = Version(f"{best.id}t{t}", best.build, front, best.chain, best.step, best.cap, best.yaw, best.pitch,
+                       best.tilt + t)
+        if not self.check_fits(best):
+            self.note("pose", skipped="budget")
+            return
+        angles = await self.compare(best, cand)
+        verdict = s1_result(angles, S)
+        self.note(
+            "pose",
+            tilt=t,
+            colour_gain=round(gain, 3),
+            views=[(round(a, 1), round(b, 1)) for a, b in angles],
+            s1=verdict,
+            kept=cand.id if verdict == "B" else best.id,
+        )
+        if verdict == "B":
+            self.versions.append(cand)
+            self.best = cand
+
     # ---- whole prompt -----------------------------------------------------------------------------------------------
     async def execute(self) -> str | None:
         try:
@@ -442,9 +525,11 @@ class Run:
             cands = [self.chain_final[k] for k in sorted(self.chain_final)]
             if cands:
                 self.best = cands[0]
-                self.best = await self.pick(cands)
+                self.best = picked = await self.pick(cands)
                 self.orient[self.S.chains] = (self.best.yaw, self.best.pitch)
                 await self.improve()
+                await self.final_check(picked)
+                await self.pose()
         except BudgetExceeded as e:
             self.note("budget_stop", error=str(e))
         except PROPAGATE:
@@ -455,7 +540,7 @@ class Run:
         best = self.final = self.best
         self.note("final", id=best.id if best else None, **self.ledger.summary())
         if best is not None:
-            return assemble(best.build, Pose(yaw=best.yaw, pitch=best.pitch, cap=best.cap))
+            return assemble(best.build, Pose(yaw=best.yaw, pitch=best.pitch, cap=best.cap, tilt=best.tilt))
         return assemble(fallback_build(V.measure_photo(self.photo)), Pose())  # nothing ever rendered
 
 

@@ -149,3 +149,108 @@ def _components(m: Mask, side: int = 96, min_frac: float = 0.01) -> int:
         sizes.append(n)
     total = max(1, sum(sizes))
     return sum(1 for n in sizes if n >= min_frac * total)
+
+
+def object_closeup(photo: Image.Image, side: int = 1024) -> Image.Image | None:
+    """The object cropped from the photo with a small margin, long side `side` px; None when the object already
+    fills most of the photo or no object is found (the close-up would add nothing)."""
+    m = photo_mask(photo)
+    b = crop_box(m)
+    if b is None:
+        return None
+    sx, sy = photo.width / m.shape[1], photo.height / m.shape[0]
+    pad = 0.06 * max(b[2] - b[0], b[3] - b[1])
+    x0, y0 = max(0.0, (b[0] - pad) * sx), max(0.0, (b[1] - pad) * sy)
+    x1, y1 = min(float(photo.width), (b[2] + pad) * sx), min(float(photo.height), (b[3] + pad) * sy)
+    if (x1 - x0) * (y1 - y0) > 0.5 * photo.width * photo.height:
+        return None
+    crop = photo.convert("RGB").crop((round(x0), round(y0), round(x1), round(y1)))
+    sc = side / max(crop.size)
+    return crop.resize((max(1, round(crop.width * sc)), max(1, round(crop.height * sc))), Image.Resampling.LANCZOS)
+
+
+# ---- colour layout: does a render show the photo's colours in the same places? (pose candidates) ----------------
+_N, _K = 96, 6
+
+
+def _lab(rgb: npt.NDArray[np.float64]) -> npt.NDArray[np.float64]:
+    a = rgb / 255.0
+    a = np.where(a > 0.04045, ((a + 0.055) / 1.055) ** 2.4, a / 12.92)
+    xyz = a @ np.array([[0.4124, 0.3576, 0.1805], [0.2126, 0.7152, 0.0722], [0.0193, 0.1192, 0.9505]]).T
+    xyz = xyz / np.array([0.9505, 1.0, 1.089])
+    f = np.where(xyz > 0.008856, np.cbrt(xyz), 7.787 * xyz + 16 / 116)
+    return np.stack([116 * f[..., 1] - 16, 500 * (f[..., 0] - f[..., 1]), 200 * (f[..., 1] - f[..., 2])], -1)
+
+
+def _square(im: Image.Image, m: Mask) -> tuple[npt.NDArray[np.float64], Mask] | None:
+    """Object crop centred in a square, _N px: (Lab pixels, mask)."""
+    b = crop_box(m)
+    if b is None:
+        return None
+    rgb = im.convert("RGB").resize((m.shape[1], m.shape[0]), Image.Resampling.BILINEAR)
+    s = max(b[2] - b[0], b[3] - b[1])
+    cx, cy = (b[0] + b[2]) // 2, (b[1] + b[3]) // 2
+    box = (cx - s // 2, cy - s // 2, cx - s // 2 + s, cy - s // 2 + s)
+    lab = _lab(np.asarray(rgb.crop(box).resize((_N, _N), Image.Resampling.BOX)).astype(np.float64))
+    mm = np.asarray(Image.fromarray(m.astype(np.uint8) * 255).crop(box).resize((_N, _N), Image.Resampling.BOX)) > 127
+    return lab, mm
+
+
+def _grow(m: Mask, r: int) -> Mask:
+    p = np.pad(m, r)
+    out = np.zeros_like(m)
+    for dy in range(2 * r + 1):
+        for dx in range(2 * r + 1):
+            out |= p[dy : dy + m.shape[0], dx : dx + m.shape[1]]
+    return out
+
+
+def _edges(lb: npt.NDArray[np.int64]) -> Mask:
+    e = np.zeros(lb.shape, bool)
+    e[1:] |= lb[1:] != lb[:-1]
+    e[:, 1:] |= lb[:, 1:] != lb[:, :-1]
+    return e
+
+
+class ColourLayout:
+    """The photo's main colours (k-means in Lab) and where their borders run. score(views) = the worst view's
+    agreement (F-score, 2 px tolerance) between the borders of the render's colour regions and the photo's. Checked
+    on 549 judged rotations of round-1 modules: tilts towards the camera that raise it by more than 0.02 won more
+    duels than they lost; plain turns did not, so only tilts use it."""
+
+    def __init__(self, photo: Image.Image) -> None:
+        sq = _square(photo, photo_mask(photo))
+        self.ok = sq is not None
+        if sq is None:
+            return
+        lab, mask = sq
+        px = lab[mask]
+        self.mu, self.sd = float(px[:, 0].mean()), float(px[:, 0].std()) + 1e-6
+        c = np.quantile(px, np.linspace(0.05, 0.95, _K), axis=0)
+        for _ in range(15):  # fixed iterations from fixed starts: the same centres on every run
+            lb = np.argmin(((px[:, None] - c[None]) ** 2).sum(-1), 1)
+            c = np.stack([px[lb == j].mean(0) if (lb == j).any() else c[j] for j in range(_K)])
+        self.c = c
+        self.edges = _edges(self._labels(lab, mask))
+
+    def _labels(self, lab: npt.NDArray[np.float64], mask: Mask) -> npt.NDArray[np.int64]:
+        lb = np.argmin(((lab[..., None, :] - self.c) ** 2).sum(-1), -1)
+        return np.where(mask, lb, -1)
+
+    def view(self, im: Image.Image) -> float:
+        sq = _square(im, render_mask(im))
+        if sq is None:
+            return 0.0
+        lab, mask = sq
+        if mask.any():  # the renderer's light is not the photo's: match the object's brightness spread first
+            L = lab[..., 0]
+            lab = lab.copy()
+            lab[..., 0] = (L - L[mask].mean()) / (L[mask].std() + 1e-6) * self.sd + self.mu
+        e = _edges(self._labels(lab, mask))
+        prec = (e & _grow(self.edges, 2)).sum() / max(1, e.sum())
+        rec = (self.edges & _grow(e, 2)).sum() / max(1, self.edges.sum())
+        return float(2 * prec * rec / max(1e-6, prec + rec))
+
+    def score(self, views: dict[str, Image.Image]) -> float:
+        return min(self.view(im) for im in views.values()) if self.ok else 0.0
+

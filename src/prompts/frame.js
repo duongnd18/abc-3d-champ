@@ -40,6 +40,57 @@ function capVertices(THREE, root) {
   }
 }
 
+// Bakes every part's world transform into its own geometry (a fresh copy) and hangs it straight under root, so the
+// organiser's box (Box3.setFromObject: each part's local box turned into place) is the tight box and the fit below
+// fills the frame. Turned or tilted groups otherwise get a box larger than the object and render smaller. Vertex and
+// draw-call counts do not change. Left as they are: instanced parts under a mirroring transform, skinned or morphed
+// meshes. A mirrored plain mesh gets its triangles reversed so its faces still point outwards.
+function __bake(THREE, root) {
+  root.updateMatrixWorld(true);
+  const parts = [];
+  root.traverse((o) => {
+    const pos = o.geometry && o.geometry.attributes && o.geometry.attributes.position;
+    if ((o.isMesh || o.isLine || o.isPoints) && pos && !o.isSkinnedMesh) parts.push([o, o.matrixWorld.clone()]);
+  });
+  const m = new THREE.Matrix4();
+  for (const [o, w] of parts) {
+    const flip = w.determinant() < 0;
+    if (o.isInstancedMesh) {
+      if (flip) continue;
+      for (let i = 0; i < o.count; i++) { o.getMatrixAt(i, m); m.premultiply(w); o.setMatrixAt(i, m); }
+      o.instanceMatrix.needsUpdate = true;
+      o.boundingBox = null; o.boundingSphere = null;
+    } else {
+      const morph = o.geometry.morphAttributes && Object.keys(o.geometry.morphAttributes).length > 0;
+      if (morph) continue;
+      const g = o.geometry.clone();
+      g.applyMatrix4(w);
+      if (flip && o.isMesh) __reverseTriangles(g);
+      o.geometry = g;
+    }
+    o.position.set(0, 0, 0); o.quaternion.identity(); o.scale.set(1, 1, 1);
+    o.matrixAutoUpdate = true; o.updateMatrix();
+    root.add(o);
+  }
+  root.updateMatrixWorld(true);
+}
+
+function __reverseTriangles(g) {
+  if (g.index) {
+    const a = g.index.array;
+    for (let i = 0; i + 2 < a.length; i += 3) { const t = a[i + 1]; a[i + 1] = a[i + 2]; a[i + 2] = t; }
+    g.index.needsUpdate = true;
+    return;
+  }
+  for (const name of Object.keys(g.attributes)) {
+    const at = g.attributes[name], n = at.itemSize, a = at.array;
+    for (let v = 0; v + 2 < at.count; v += 3) {
+      for (let k = 0; k < n; k++) { const i1 = (v + 1) * n + k, i2 = (v + 2) * n + k; const t = a[i1]; a[i1] = a[i2]; a[i2] = t; }
+    }
+    at.needsUpdate = true;
+  }
+}
+
 // Centres the object and scales its longest side to 0.99, inside the organiser's [-0.5, 0.5] cube.
 function fitToUnitCube(THREE, root) {
   root.updateMatrixWorld(true);

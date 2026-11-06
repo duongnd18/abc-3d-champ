@@ -28,16 +28,16 @@ class Settings:
     reserve_calls: int = 1  # kept for a last repair
 
     plan: Role = Role("gpt-6.1-sol", "medium", 6_000, tier=TIER)  # notes and a checklist from the photo
-    draft: Role = Role("gpt-6.1-sol", "medium", 24_000, "high", TIER)
+    draft: Role = Role("gpt-6.1-sol", "high", 32_000, "high", TIER)  # every top entry drafts at high effort
     refine: Role = Role("gpt-6.1-sol", "high", 32_000, "high", TIER)
     repair: Role = Role("gpt-6.1-sol", "medium", 24_000, "high", TIER)
-    pick: Role = Role("gpt-6-astra", "low", 3_000)  # panel fallback when the Stage-1 pick does not fit the budget
+    pick: Role = Role("gpt-6.1-sol", "medium", 6_000, tier=TIER)  # scores all chain finals at once, both orders
     orient: Role = Role("gpt-6.1-sol", "low", 2_000, tier=TIER)  # which way to turn each chain's draft
     critic: Role = Role("gpt-6.1-sol", "medium", 6_000, tier=TIER)  # per-view problems before a rewrite (review=True)
-    duel: Role = Role("gpt-6.1-sol", "low", 2_000, tier=TIER)  # GLM's Stage 1 on one view: the pick (and the gate)
+    duel: Role = Role("gpt-6.1-sol", "medium", 6_000, tier=TIER)  # GLM's Stage 1 on one view: final check, pose
 
-    # Typical: 1 plan + 3 × 3 + 24 pick calls + 3 = 37 calls. Calls are held at their worst case before dispatch
-    # (decisions depend on recorded usage only, so a replay makes the same ones).
+    # Typical: 1 plan + 3 × 3 + 2 pick + 3 rewrites + 8 final check (+ 8 pose check) = 26-34 calls. Calls are held
+    # at their worst case before dispatch (decisions depend on recorded usage only, so a replay makes the same ones).
     chains: int = 3  # run concurrently, each with its own block of request ids
     # Different starting points, so the three drafts differ.
     starts: tuple[str, ...] = ("notes", "proportions", "plain")
@@ -49,11 +49,20 @@ class Settings:
     repairs: int = 1  # per chain and for the post-pick stage, for a module the renderer rejected
     chain_ids: int = 1000  # chain k uses request ids from (k + 1) * chain_ids
     sheet_px: int = 512  # side of one view in the refine sheet (the judge's Stage-1 views are 1024 px)
-    pick_px: int = 384  # side of one view in the pick sheets (panel fallback)
-    # Pick: a Stage-1 style question on each view for every pair of chain finals in both seat orders, lowest total.
-    pick_s1: bool = True
+    pick_px: int = 512  # side of one view in the pick sheets
+    # Pick: one call scores every chain final from its 4-view sheet, in both candidate orders (2 calls). pick_s1=True
+    # asks the Stage-1 question per view for every pair instead (24 calls; measured no better than 2).
+    pick_s1: bool = False
     pick_wave: int = 8  # Stage-1 pick calls sent at once
     post_refines: int = 3  # rewrites of the picked module
+    # After the rewrites: the picked module against the last rewrite in GLM's Stage 1 (8 calls); the picked one comes
+    # back only when it wins.
+    final_check: bool = True
+    # Pose candidates: extra tilts towards the camera (degrees) of the final module. A tilt whose colour layout matches
+    # the photo better by more than pose_colour_gain (vision.ColourLayout, no model call) meets the module in GLM's
+    # Stage 1 (8 calls) and replaces it only when it wins.
+    pose_tilts: tuple[int, ...] = (10, 20)
+    pose_colour_gain: float = 0.02
     # review=False rewrites with the checklist only, gate=False keeps every rewrite that renders.
     review: bool = False
     gate: bool = False

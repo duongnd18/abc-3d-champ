@@ -2,8 +2,9 @@
 
 The model writes only `function build(THREE) { ... return group; }` (and its own helpers). The helper library is
 prepended; the framing code (prompts/frame.js) turns the object to the chosen pose, tips it towards the camera when
-the photo looks down on it (and flat objects by 15°), applies the judge's material rules and fits it to the 0.99
-cube, so every module has the same frame and satisfies the output rules.
+flat objects by 15° (the model tilts other objects itself, playbook item 2), applies the judge's material rules, bakes
+every part's transform into its geometry and fits the tight box to the 0.99 cube, so every module has the same frame
+and satisfies the output rules.
 """
 
 from __future__ import annotations
@@ -83,6 +84,7 @@ class Pose:
     yaw: int = 0
     pitch: int = 0
     cap: bool = False  # drop the costliest parts to fit the vertex limit (last resort, see frame.js capVertices)
+    tilt: int = 0  # extra tilt towards the camera after the flat-object tilt (degrees; pose candidates)
 
 
 UPRIGHT = Pose()
@@ -125,10 +127,12 @@ def assemble(build: str, pose: Pose = UPRIGHT) -> str:
         f"  const pitchG = new THREE.Group(); pitchG.add(yawG); pitchG.rotation.x = {math.radians(pose.pitch):.6f};\n"
         "  const tiltG = new THREE.Group(); tiltG.add(pitchG);\n"
         "  tiltTowardCamera(THREE, tiltG);\n"
-        "  const root = new THREE.Group(); root.add(tiltG);\n"
+        + (f"  tiltG.rotation.x += {math.radians(pose.tilt):.6f};\n" if pose.tilt else "")
+        + "  const root = new THREE.Group(); root.add(tiltG);\n"
         + ("  capVertices(THREE, root);\n" if pose.cap else "")
         + "  __gen3dMergeDraws(THREE, root);\n"
         "  __gen3dTextureBudget(THREE, root);\n"
+        "  __bake(THREE, root);\n"
         "  fitToUnitCube(THREE, root);\n"
         "  return root;\n"
         "}\n"

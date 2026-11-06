@@ -14,8 +14,7 @@ HELPER LIBRARY — already placed before your code. Call these functions; never 
 
 HOW YOUR CODE IS USED: you write `function build(THREE) { ... return group; }` plus any helper functions of your
 own (each taking THREE as a parameter named exactly THREE). The pipeline appends
-`export default function generate(THREE)` that calls build(THREE), tips the whole object towards the camera when
-the photo looks down on it (and flat objects by 15°), caps very metallic materials and centres and scales the
+`export default function generate(THREE)` that calls build(THREE), tips flat objects (height under half the width or depth) 15° towards the camera, caps very metallic materials and centres and scales the
 result into the organiser's cube. So: no `export`, no `import`, no
 centring or scaling of the whole object, no top-level use of THREE.
 
