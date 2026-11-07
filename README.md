@@ -20,7 +20,7 @@ responses and renders, never on clocks or completion order.
 3. pick one chain final: one call scores them all from their four-view sheets, in both candidate orders. Every
    judging call (this pick, the re-pick of each wide pass, the final check and the pose check) runs on gpt-6-luna,
    whose verdicts agree best with GLM's
-4. two wide passes on the picked module: three rewrites at once (plain, proportions and silhouette, details and
+4. three wide passes on the picked module: three rewrites at once (plain, proportions and silhouette, details and
    colours), then the same pick over the current module and its rewrites, the current one with a 0.25 bonus so a
    rewrite replaces it only when clearly better; a pass narrows to fewer rewrites (down to the plain single rewrite)
    when the budget cannot hold them plus the final check. Then one check: the picked module against the result in

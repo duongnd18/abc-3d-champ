@@ -61,7 +61,7 @@ class Settings:
     # module and the rewrites together (2 calls); the current one gets post_keep_bonus, so a rewrite replaces it only
     # when clearly better (the leader re-picks after every step with a 0.25 bonus for the parent). When the budget
     # cannot hold post_width rewrites plus the final check, the pass narrows; at width 1 it is the plain rewrite.
-    post_refines: int = 2
+    post_refines: int = 3
     post_width: int = 3
     post_keep_bonus: float = 0.25
     post_ids: int = 5000  # wide pass k, slot w uses request ids from post_ids + 100 * k + 10 * w
