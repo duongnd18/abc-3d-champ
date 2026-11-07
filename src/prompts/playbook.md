@@ -9,7 +9,7 @@ BUILD PLAYBOOK (what consistently wins with this judge):
    with group.rotation.x = +(the photo's downward angle minus about 10°, usually 10-25°, in radians); positive tips
    the top towards +Z. Balance the two vertical cameras: the camera 15° below the front must still see the top
    features the photo shows, and the camera 30° above must not see much more of the top than the photo does.
-   Objects lower than half their width or depth are already tipped 15° by the pipeline: add only the tilt beyond 15°.
+   Objects lower than half their width or depth are already tipped 25° by the pipeline: add only the tilt beyond 25°.
 3. Use the helper library: lathe / hollowLathe for round bodies (bottles, cups, vases, lamp stems; vessels get a
    real wall and an open rim), tube for handles, cords, wires and rims, extrudeOutline for flat outlines, plates,
    blades and logos (with holes instead of dark patches), roundedBox for device shells instead of raw boxes,

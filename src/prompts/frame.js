@@ -1,11 +1,13 @@
 // ===== Framing (appended by the pipeline after build(THREE); not shown to the model) =====
 
-// Tips a flat object (height under half its width or depth) 15° towards the camera.
+// Tips a flat object (height under half its width or depth) 25° towards the camera. Not 15°: that puts a flat top
+// exactly edge-on to the judge's camera 15° below the front (round 2: front_below penalty 1.3-1.6 worse on the 24
+// tilted prompts; GLM on those prompts, same modules: 25° beat 15° 11-7-6).
 function tiltTowardCamera(THREE, obj) {
   obj.updateMatrixWorld(true);
   const size = new THREE.Vector3();
   new THREE.Box3().setFromObject(obj).getSize(size);
-  if (size.y < 0.5 * Math.max(size.x, size.z)) obj.rotation.x += (15 * Math.PI) / 180;
+  if (size.y < 0.5 * Math.max(size.x, size.z)) obj.rotation.x += (25 * Math.PI) / 180;
 }
 
 // Last resort when a module stays over the checker's 250,000 vertices after its repair: drop the parts that cost the

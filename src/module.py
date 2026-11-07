@@ -2,7 +2,7 @@
 
 The model writes only `function build(THREE) { ... return group; }` (and its own helpers). The helper library is
 prepended; the framing code (prompts/frame.js) turns the object to the chosen pose, tips it towards the camera when
-flat objects by 15° (the model tilts other objects itself, playbook item 2), applies the judge's material rules, bakes
+flat objects by 25° (the model tilts other objects itself, playbook item 2), applies the judge's material rules, bakes
 every part's transform into its geometry and fits the tight box to the 0.99 cube, so every module has the same frame
 and satisfies the output rules.
 """
@@ -78,7 +78,7 @@ LIBRARY_FUNCS = (
 class Pose:
     """Whole-object rotation: yaw about Y, then pitch about X (degrees).
 
-    A flat object is then tipped 15° towards the camera.
+    A flat object is then tipped 25° towards the camera.
     """
 
     yaw: int = 0

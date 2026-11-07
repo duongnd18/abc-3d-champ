@@ -31,10 +31,12 @@ class Settings:
     draft: Role = Role("gpt-6.1-sol", "high", 32_000, "high", TIER)  # every top entry drafts at high effort
     refine: Role = Role("gpt-6.1-sol", "high", 32_000, "high", TIER)
     repair: Role = Role("gpt-6.1-sol", "medium", 24_000, "high", TIER)
-    pick: Role = Role("gpt-6.1-sol", "medium", 6_000, tier=TIER)  # scores all chain finals at once, both orders
-    orient: Role = Role("gpt-6.1-sol", "low", 2_000, tier=TIER)  # which way to turn each chain's draft
+    # Every judging role runs on Luna: of the OpenAI models, its verdicts agree best with GLM's (repeatedly verified;
+    # mdt's L133: the official Stage-1 prompt on Luna low matched GLM best of 8 configurations), at 1/20 of Sol's price.
+    pick: Role = Role("gpt-6-luna", "medium", 6_000)  # scores all chain finals at once, both orders
+    orient: Role = Role("gpt-6-luna", "low", 2_000)  # which way to turn each chain's draft
     critic: Role = Role("gpt-6.1-sol", "medium", 6_000, tier=TIER)  # per-view problems before a rewrite (review=True)
-    duel: Role = Role("gpt-6.1-sol", "medium", 6_000, tier=TIER)  # GLM's Stage 1 on one view: final check, pose
+    duel: Role = Role("gpt-6-luna", "low", 6_000)  # GLM's Stage 1 on one view: final check, pose
 
     # Typical: 1 plan + 3 × 3 + 2 pick + 3 rewrites + 8 final check (+ 8 pose check) = 26-34 calls. Calls are held
     # at their worst case before dispatch (decisions depend on recorded usage only, so a replay makes the same ones).
