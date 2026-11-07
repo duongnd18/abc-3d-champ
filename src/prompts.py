@@ -156,3 +156,13 @@ S1_SCHEMA: dict[str, Any] = {
     "name": "s1",
     "schema": _obj({"penalty_1": {"type": "integer"}, "penalty_2": {"type": "integer"}, "issues": {"type": "string"}}),
 }
+
+# Focus of each rewrite in a wide post-pick pass (Settings.post_width): the first is the plain rewrite.
+POST_FOCUS: tuple[str, ...] = (
+    "",
+    "\nFocus of this rewrite: the overall proportions and silhouette. Compare the width, height and depth of the whole "
+    "object and of each large part with the photo (judges most often call a model too narrow, too slender or too flat) "
+    "and fix every one that is off; keep the details that are already right.\n",
+    "\nFocus of this rewrite: the details a judge checks first: small parts, exact colours and materials, printed text "
+    "and surface pattern. Add or correct them; keep the overall shape and pose.\n",
+)

@@ -136,7 +136,9 @@ class Run:
         self.orient: dict[int, tuple[int, int]] = {}  # (yaw, pitch) per chain; slot S.chains = the picked module's
         self.plan: dict[str, Any] = {}
         self.checklist: list[str] = []
-        self.repairs_left = [self.S.repairs] * (self.S.chains + 1)  # the last slot is the post-pick stage's
+        # chains, then the post-pick stage, then one slot per wide-pass rewrite (each with its own repairs, so which
+        # rewrite gets a repair never depends on timing)
+        self.repairs_left = [self.S.repairs] * (self.S.chains + 1 + self.S.post_refines * self.S.post_width)
         self.render_lock = asyncio.Lock()  # one render at a time: a render over 30 s fails as RenderUnavailable
         self.best: Version | None = None  # the module that would be submitted now
         self.final: Version | None = None
@@ -173,14 +175,18 @@ class Run:
         self.versions.append(v)
         return v
 
-    async def settle(self, calls: Calls, vid: str, build: str | None, chain: int, step: int) -> Version | None:
-        """Render a module; a rejected one gets repair calls while its chain (or stage) has repairs left."""
+    async def settle(
+        self, calls: Calls, vid: str, build: str | None, chain: int, step: int, slot: int | None = None
+    ) -> Version | None:
+        """Render a module; a rejected one gets repair calls while its chain (or stage, or wide-pass slot) has repairs
+        left."""
         if build is None:
             self.note("no_code", id=vid)
             return None
+        slot = chain if slot is None else slot
         res = await self.realize(vid, build, chain, step)
-        while isinstance(res, str) and self.repairs_left[chain] > 0:
-            self.repairs_left[chain] -= 1
+        while isinstance(res, str) and self.repairs_left[slot] > 0:
+            self.repairs_left[slot] -= 1
             text = P.REPAIR.format(problems=res, advice=repair_advice(res), code=build)
             r = await calls.ask("repair", self.S.repair, P.CODER_SYSTEM, [text])
             fixed = extract_build(r.text) if r.ok else None
@@ -290,7 +296,8 @@ class Run:
             self.chain_final[k] = current
 
     # ---- 3. one call scores the chains' modules on the judge's views, both candidate orders -----------------------
-    async def pick(self, cands: list[Version]) -> Version:
+    async def pick(self, cands: list[Version], keep: float = 0.0) -> Version:
+        """The best of cands; keep is subtracted from the first candidate's penalty (the incumbent of a wide pass)."""
         S, n = self.S, len(cands)
         default = cands[0]  # the lowest chain: the plan's notes
         if n == 1:
@@ -322,6 +329,8 @@ class Run:
             self.note("pick", failed=True, best=default.id)
             return default
         score = [total[i] / seen[i] if seen[i] else 99.0 for i in range(n)]
+        if seen[0]:
+            score[0] -= keep
         best = min(range(n), key=lambda i: (score[i], cands[i].chain))
         self.note("pick", scores={v.id: round(s, 2) for v, s in zip(cands, score)}, best=cands[best].id)
         return cands[best]
@@ -409,6 +418,10 @@ class Run:
             best = self.best
             if best is None:
                 return
+            width = next((w for w in range(S.post_width, 1, -1) if self.wide_fits(best, w)), 1)
+            if width > 1:
+                await self.wide_pass(k, best, width)
+                continue
             if not self.pass_fits(best):
                 self.note("post_stop", reason="budget", passes=k - 1)
                 return
@@ -438,6 +451,35 @@ class Run:
             )
             if kept:
                 self.best = new
+
+    def wide_fits(self, v: Version, width: int) -> bool:
+        """width rewrites (each with a possible repair), the pick over them and the final check, at their worst case."""
+        S, n = self.S, 2 * len(JUDGE)
+        rewrite = self.worst_case(S.refine, P.CODER_SYSTEM, self.refine_parts(v, "x" * 4600))
+        pick = self.worst_case(S.pick, P.JUDGE_SYSTEM, [self.photo_png] * (width + 2) + ["x" * 3000])
+        check = self.worst_case(S.duel, P.JUDGE_SYSTEM, self.gate_parts(v, v, JUDGE[0][0]))
+        return self.ledger.can(2 * width + 2 + n, 2 * width * rewrite + 2 * pick + n * check)
+
+    async def wide_pass(self, k: int, best: Version, width: int) -> None:
+        """width rewrites of best at once (own request ids and repairs per slot), then one pick over best + rewrites."""
+        S, post = self.S, self.S.chains
+        base = P.checklist_block(self.checklist)
+
+        async def one(w: int) -> Version | None:
+            calls = self.calls.fork(S.post_ids + 100 * k + 10 * w)
+            notes = base + P.POST_FOCUS[w % len(P.POST_FOCUS)]
+            r = await calls.ask("post_refine", S.refine, P.CODER_SYSTEM, self.refine_parts(best, notes))
+            slot = S.chains + 1 + (k - 1) * S.post_width + w
+            build = extract_build(r.text) if r.ok else None
+            return await self.settle(calls, f"p{k}w{w}", build, post, best.step + 1, slot=slot)
+
+        news = [v for v in await asyncio.gather(*(one(w) for w in range(width))) if v is not None]
+        if not news:
+            self.note("post_wide", n=k, width=width, valid=0, kept=best.id)
+            return
+        chosen = await self.pick([best, *news], keep=S.post_keep_bonus)
+        self.note("post_wide", n=k, width=width, valid=len(news), kept=chosen.id)
+        self.best = chosen
 
     def check_fits(self, v: Version) -> bool:
         n = 2 * len(JUDGE)

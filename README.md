@@ -18,8 +18,11 @@ responses and renders, never on clocks or completion order.
    photo, a close-up crop of the object and the module rendered from the judge's four views; a rejected module gets
    a repair call
 3. pick one chain final: one call scores them all from their four-view sheets, in both candidate orders
-4. three more full rewrites of the picked module, then one check: the picked module against the last rewrite in the
-   judge's Stage 1 (per view, both seat orders); the picked one comes back only when it wins
+4. two wide passes on the picked module: three rewrites at once (plain, proportions and silhouette, details and
+   colours), then the same pick over the current module and its rewrites, the current one with a 0.25 bonus so a
+   rewrite replaces it only when clearly better; a pass narrows to fewer rewrites (down to the plain single rewrite)
+   when the budget cannot hold them plus the final check. Then one check: the picked module against the result in
+   the judge's Stage 1 (per view, both seat orders); the picked one comes back only when it wins
 5. pose: extra tilts towards the camera, screened by how well their colour layout matches the photo (no model
    call), and kept only when they win the same Stage-1 check
 6. output: every part's transform baked into its geometry and the tight box fitted to the cube (a measured

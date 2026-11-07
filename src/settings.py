@@ -54,7 +54,15 @@ class Settings:
     # asks the Stage-1 question per view for every pair instead (24 calls; measured no better than 2).
     pick_s1: bool = False
     pick_wave: int = 8  # Stage-1 pick calls sent at once
-    post_refines: int = 3  # rewrites of the picked module
+    # Post-pick passes. Each pass writes post_width rewrites of the current module at once (the per-prompt limit of 3
+    # concurrent calls is otherwise idle here), each with its own focus (POST_FOCUS), then the pick scores the current
+    # module and the rewrites together (2 calls); the current one gets post_keep_bonus, so a rewrite replaces it only
+    # when clearly better (the leader re-picks after every step with a 0.25 bonus for the parent). When the budget
+    # cannot hold post_width rewrites plus the final check, the pass narrows; at width 1 it is the plain rewrite.
+    post_refines: int = 2
+    post_width: int = 3
+    post_keep_bonus: float = 0.25
+    post_ids: int = 5000  # wide pass k, slot w uses request ids from post_ids + 100 * k + 10 * w
     # After the rewrites: the picked module against the last rewrite in GLM's Stage 1 (8 calls); the picked one comes
     # back only when it wins.
     final_check: bool = True
