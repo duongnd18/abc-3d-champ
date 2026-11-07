@@ -15,7 +15,7 @@ class Role:
 
 
 # service_tier of the Sol calls.
-TIER = "priority"
+TIER = "default"  # the base worker's rule: service_tier="default" (flex is rejected by the witness)
 # The orientation step's candidates (yaw, pitch); the first is the draft as built.
 TURNS = ((0, 0), (45, 0), (-45, 0), (90, 0), (-90, 0), (180, 0), (0, 90), (0, -90))
 
