@@ -36,15 +36,8 @@ def _fill(m):
     return ~seen[1:-1, 1:-1]
 
 def _pieces(m):
-    """keep connected pieces of at least 4% of the largest"""
-    try:
-        from scipy import ndimage as ni
-        lab, n = ni.label(m)
-        if n <= 1: return m
-        a = ni.sum(m, lab, range(1, n + 1)); ok = np.nonzero(a >= .04 * a.max())[0] + 1
-        return np.isin(lab, ok)
-    except ImportError:
-        return m
+    """The mask unchanged: the runtime has no scipy, so the leader's piece filter always fell back to this."""
+    return m
 
 def _seg(rgb, bg, noise, b, k):
     d = np.abs(rgb - bg).max(-1); cut = k * max(18.0, 3 * noise + 8)
