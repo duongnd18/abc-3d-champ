@@ -1,0 +1,23 @@
+.venv/
+.venv*/
+__pycache__/
+*.py[cod]
+.mypy_cache/
+.ruff_cache/
+outputs/
+.env
+.idea/
+.DS_Store
+
+# Local workspace: prompt images, competition specs, analysis and notes; not part of the code
+img/
+reports/
+research_notes/
+tasks/
+competition information/
+ai3d-devkit/
+
+# Candidate 2 (miner404) live-runner files
+witness.json
+proof-parameters/
+CLAUDE.md 
