@@ -79,11 +79,25 @@ JUDGE_DRAW = 0.7  # the judge's own first-stage draw threshold, in mean penalty 
 # Views the per-step gate (judge_pick) asks about, as indices into judge_shots (left, right, below, above) with the judge's own
 # angle wording; orders alternate (parent shown first on even positions). (0, 1) is the round-4 gate (two side views).
 JUDGE_PICK_VIEWS: tuple[int, ...] = (0, 1)
-# Stretch finish (round-4 ticket 04d5fdc): each shorter bounding-box axis stretched by up to STRETCH_CAP, capped at 0.99 of the
-# cube; 0 leaves the module as finished. GLM-4.6V-Flash Stage 1 on the official round-4 modules, finished module vs the same
-# module stretched (127 prompts): 799dbc 2385ec1 x1.10 -0.055, x1.15 +0.047, x1.25 +0.047, x1.40 +0.055; 69a756 d481cfc x1.15
-# +0.110, x1.25 +0.142, x1.40 +0.094; 04d5fdc x1.25 over its x1.15 +0.102, x1.40 +0.039.
+# Stretch finish (round-4 ticket 04d5fdc): each shorter bounding-box axis stretched by up to STRETCH_CAP, capped at 0.999 of the
+# cube (the plan's own fill, so the longest axis no longer shrinks 0.9%); 0 leaves the module as finished. GLM-4.6V-Flash Stage 1
+# on the official round-4 modules, finished module vs the same module stretched (127 prompts, cap 0.99): 799dbc 2385ec1 x1.10
+# -0.055, x1.15 +0.047, x1.25 +0.047, x1.40 +0.055; 69a756 d481cfc x1.15 +0.110, x1.25 +0.142, x1.40 +0.094; 04d5fdc x1.25 over its
+# x1.15 +0.102, x1.40 +0.039.
+# Round bodies (lathe/cylinder/sphere/... calls >= STRETCH_ROUND_SHARE of the round + flat geometry calls) whose depth would stretch
+# more than 1.1x their width take the width's factor on depth too, so a round cross-section stays round (round-4 labels, in
+# sample: the side views at +-30 degrees penalise these stretched bodies; estimated +0.005). Modules naming a spout (kettles,
+# teapots: the spout-handle width cannot stretch, so only height and depth would) stay as finished (in sample, not stretching
+# them at x1.25: +2/+3/+1 prompts on 3 bases).
 STRETCH_CAP = 1.25
+# Selector letters follow the order shown in each call (see scores()); False keeps the leader's letters.
+UNBIASED_LABELS = False  # measured 13/11 (Luna low, selcal2): no gain over the leader's letters, so the leader's behaviour is kept
+STRETCH_ROUND_SHARE = 0.8
+_ROUND_GEOMETRY = re.compile(r"(?:Lathe|Cylinder|Sphere|Torus|Capsule|Cone)Geometry\s*\(")
+_FLAT_GEOMETRY = re.compile(r"(?:Box|Extrude|Shape|Plane|RoundedBox)Geometry\s*\(")
+_SPOUT = re.compile(r"[Ss]pout|SPOUT")  # not claspOuter
+_STRETCH_FACTORS = "    const sx = f(s.x), sy = f(s.y), sz = f(s.z);\n"
+_STRETCH_ROUND = "    const sx = f(s.x), sy = f(s.y), sz = f(s.z) > 1.1 * sx ? sx : f(s.z);\n"
 STRETCH_TAIL = "  return root;\n}\n"
 STRETCH = """  const __outer = new THREE.Group();
   __outer.add(root);
@@ -91,7 +105,7 @@ STRETCH = """  const __outer = new THREE.Group();
     const b = new THREE.Box3().setFromObject(__outer);
     const s = b.getSize(new THREE.Vector3());
     const c = b.getCenter(new THREE.Vector3());
-    const f = function (v) { return v > 1e-6 && Number.isFinite(v) ? Math.min(1.15, 0.99 / v) : 1; };
+    const f = function (v) { return v > 1e-6 && Number.isFinite(v) ? Math.min(1.15, 0.999 / v) : 1; };
     const sx = f(s.x), sy = f(s.y), sz = f(s.z);
     __outer.scale.set(sx, sy, sz);
     __outer.position.set(-c.x * sx, -c.y * sy, -c.z * sz);
@@ -376,6 +390,7 @@ function __bake404(THREE, root) {
     if (place) node.position.copy(place).sub(up); else node.position.set(0, 0, 0);
     node.quaternion.identity();
     node.scale.set(1, 1, 1);
+    node.updateMatrix();  // a part built with matrixAutoUpdate = false would keep its old matrix and be transformed twice
   });
   root.updateMatrixWorld(true);
 }
@@ -1176,22 +1191,36 @@ class Pipeline:
         """Score candidates twice in opposite orders on the front views and the grid; lower is better."""
         ordered = candidates.copy()
         random.Random(f"{self.seed}:{self.digest}:{request_id}").shuffle(ordered)
-        labels = {chr(65 + i): candidate for i, candidate in enumerate(ordered)}
+        # Letters follow the order shown in each call, so the second call's first candidate is A again. Keeping each
+        # candidate's letter across the reversed call biases the pick by letter (a child named A replaced its parent on 48%
+        # of selections against 66% when named B, Athanor's records); naming by position cancels it over the two orders.
+        if UNBIASED_LABELS:
+            orders = [{chr(65 + i): c for i, c in enumerate(sequence)} for sequence in (ordered, ordered[::-1])]
+        else:  # the leader's letters: each candidate keeps its letter in the reversed call
+            first = {chr(65 + i): c for i, c in enumerate(ordered)}
+            orders = [first, dict(reversed(list(first.items())))]
         calls = []
-        for offset, order in enumerate((list(labels), list(reversed(labels)))):
+        for offset, labels in enumerate(orders):
             content: list[dict[str, Any]] = [{"type": "input_text", "text": "TARGET:"}, self.target, *self.closeup]
             if self.brief:
                 content.append({"type": "input_text", "text": self.brief})
-            for label in order:
+            for label, candidate in labels.items():
                 content += [
                     {"type": "input_text", "text": f"CANDIDATE {label} FRONT VIEWS:"},
-                    {"type": "input_image", "image_url": data_url(labels[label].front), "detail": "high"},
+                    {"type": "input_image", "image_url": data_url(candidate.front), "detail": "high"},
                     {"type": "input_text", "text": f"CANDIDATE {label} GRID:"},
-                    {"type": "input_image", "image_url": data_url(labels[label].sides), "detail": "high"},
+                    {"type": "input_image", "image_url": data_url(candidate.sides), "detail": "high"},
                 ]
             calls.append(Call(request_id + offset, SOL, instructions, content, SELECT_EFFORT, SELECT_MAX_OUTPUT,
-                              text=prompts.select_close_schema(list(labels))))
-        judgements = self.parse_judgement(labels, self.run_stage(pool, calls))
+                              text=prompts.select_close_schema(sorted(labels))))
+        replies = self.run_stage(pool, calls)
+        parts = [self.parse_judgement(labels, [reply]) for labels, reply in zip(orders, replies, strict=True)]
+        judgements = {}
+        for candidate in ordered:
+            seen = [part[candidate.name] for part in parts if candidate.name in part]
+            if seen:
+                fixes = [fix for judgement in seen for fix in judgement.fixes]
+                judgements[candidate.name] = Judgement(sum(j.score for j in seen) / len(seen), list(dict.fromkeys(fixes))[:8])
         for candidate in candidates:
             if candidate.name in judgements:
                 candidate.fixes = judgements[candidate.name].fixes
@@ -1330,6 +1359,8 @@ class Pipeline:
                 source = self.judged_tilt(pool, source)
             if plan.tone:
                 source = self.toned(source)
+            if TEXFIX:
+                source = self.texfixed(source)
             if STRETCH_CAP:
                 source = self.stretched(source, STRETCH_CAP)
             if plan.forward:
@@ -1380,12 +1411,21 @@ class Pipeline:
         return source
 
     def stretched(self, source: str, cap: float) -> str:
-        """The finished module with each shorter bounding-box axis stretched by up to `cap` (capped at 0.99 of the cube), as it is
-        when the module does not end in the fit wrapper or the renderer refuses."""
-        text = source if source.endswith("\n") else source + "\n"
-        if not text.endswith(STRETCH_TAIL):
+        """The finished module through stretch(); as it is when the renderer refuses."""
+        turned = stretch(source, cap)
+        if turned == source:
             return source
-        turned = text[: -len(STRETCH_TAIL)] + STRETCH.replace("Math.min(1.15,", f"Math.min({cap},", 1)
+        try:
+            self.renderer.render(turned, FRONT_JUDGE)
+        except RenderRejected:
+            return source
+        return turned
+
+    def texfixed(self, source: str) -> str:
+        """The finished module with smooth sampling on data textures left at three.js defaults; as it is when the renderer refuses."""
+        turned = texfix(source)
+        if turned == source:
+            return source
         try:
             self.renderer.render(turned, FRONT_JUDGE)
         except RenderRejected:
@@ -1727,6 +1767,50 @@ def judge_shots(front: bytes) -> list[bytes]:
         image.crop((x, y, x + width // 2, y + height // 2)).save(buffer, "PNG")
         shots.append(buffer.getvalue())
     return shots
+
+
+def stretch(source: str, cap: float) -> str:
+    """The module with each shorter bounding-box axis stretched by up to `cap` (capped at 0.999 of the cube), depth held to the
+    width's factor on a round body; as it is when the module does not end in the fit wrapper or names a spout."""
+    text = source if source.endswith("\n") else source + "\n"
+    if not text.endswith(STRETCH_TAIL) or _SPOUT.search(source):
+        return source
+    block = STRETCH.replace("Math.min(1.15,", f"Math.min({cap},", 1)
+    rounds, flats = len(_ROUND_GEOMETRY.findall(source)), len(_FLAT_GEOMETRY.findall(source))
+    if rounds / max(1, rounds + flats) >= STRETCH_ROUND_SHARE:
+        block = block.replace(_STRETCH_FACTORS, _STRETCH_ROUND, 1)
+    return text[: -len(STRETCH_TAIL)] + block
+
+
+# Data textures the model leaves at three.js defaults sample with NearestFilter and no mipmaps: a procedural wood, fabric or
+# metal map then renders speckled and aliased at the judge's 1024 px (about 30/127 round-4 modules of 799dbc). Linear filtering
+# with mipmaps shows the same map smoothly; textures the model filtered itself are left alone.
+TEXFIX = True
+TEXFIX_LINE = (
+    "  const __t404 = new Set(); root.traverse((o) => { const list = o.material ? (Array.isArray(o.material) ? o.material : [o.material]) : []; "
+    "for (const m of list) { if (!m) continue; for (const k of Object.keys(m)) { const t = m[k]; if (!t || !t.isTexture || __t404.has(t)) continue; __t404.add(t); "
+    "if (t.isDataTexture && t.magFilter === THREE.NearestFilter && t.minFilter === THREE.NearestFilter) { t.magFilter = THREE.LinearFilter; "
+    "t.minFilter = THREE.LinearMipmapLinearFilter; t.generateMipmaps = true; t.anisotropy = 8; t.needsUpdate = true; } } } });\n"
+)
+_DATA_TEXTURE = re.compile(r"(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*new THREE\.DataTexture\(")
+
+
+def _default_filtered(source: str) -> bool:
+    """Whether the model builds a data texture without setting its magFilter (the wrapper's own `smaller` copies aside)."""
+    for found in _DATA_TEXTURE.finditer(source):
+        name = found.group(1)
+        if name != "smaller" and not re.search(re.escape(name) + r"\.magFilter\s*=", source[found.end(): found.end() + 2500]):
+            return True
+    return False
+
+
+def texfix(source: str) -> str:
+    """The module with TEXFIX_LINE before the fit wrapper's box; as it is when every data texture of the model is filtered."""
+    at = source.rfind(_FIT)
+    start = source.rfind(_EXPORT_LINE)
+    if at < 0 or start < 0 or at < start or not _default_filtered(source):
+        return source
+    return source[:at] + TEXFIX_LINE + source[at:]
 
 
 def tone(source: str) -> str:
